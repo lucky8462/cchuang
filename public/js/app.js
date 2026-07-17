@@ -104,7 +104,7 @@ startBtn.addEventListener('click', async () => {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || '上傳失敗');
 
-    startBtn.textContent = '偵測格線中...';
+    startBtn.textContent = '自動辨識中...';
     for (const info of data.images) {
       const page = {
         id: info.id,
@@ -118,19 +118,6 @@ startBtn.addEventListener('click', async () => {
         cells: [],
         selection: null,
       };
-      // Resolved before the grid editor is ever shown, so there is no
-      // window in which the user could be mid-edit when this lands and
-      // have their changes silently overwritten.
-      try {
-        const gridResp = await fetch(`/api/images/${page.id}/grid-suggest`);
-        const gridData = await gridResp.json();
-        if (gridResp.ok && gridData.rows.length >= 2 && gridData.cols.length >= 2) {
-          page.rows = gridData.rows;
-          page.cols = gridData.cols;
-        }
-      } catch (e) {
-        // keep the 1x1 default grid; user can build it up manually
-      }
       pages.push(page);
     }
 
@@ -139,18 +126,44 @@ startBtn.addEventListener('click', async () => {
     document.getElementById('export-section').hidden = false;
     renderPageTabs();
 
-    // Fully automatic by default: build the cell grid from the detected
-    // lines and run OCR immediately for every page, no clicks required.
-    // The grid/merge editor stays reachable afterwards for anyone whose
-    // photo confuses auto-detection (glare, heavy tilt, blur) and needs a
-    // quick manual fix - but it is no longer a mandatory gate.
+    // Fully automatic by default: reconstruct the table straight from where
+    // the text actually is (one whole-image OCR pass), which is far more
+    // resilient to glare/tilt/blur than detecting printed grid lines. Falls
+    // back to the line-detection + per-cell-OCR path only if that fails.
+    // The grid/merge editor stays reachable afterwards for manual touch-up,
+    // but is no longer a mandatory gate.
     for (let i = 0; i < pages.length; i += 1) {
       const page = pages[i];
-      initCellsFromGrid(page);
-      page.stage = 'review';
-      selectPage(i);
-      renderPageTabs();
-      await runOcrForPage(page);
+      let usedAutoTable = false;
+      try {
+        const autoResp = await fetch(`/api/images/${page.id}/auto-table`);
+        const autoData = await autoResp.json();
+        if (autoResp.ok && autoData.cells && autoData.cells.length) {
+          page.numRows = autoData.numRows;
+          page.numCols = autoData.numCols;
+          page.cells = autoData.cells;
+          page.reconStrategy = 'text';
+          usedAutoTable = true;
+        }
+      } catch (e) {
+        // fall through to the grid-line based path below
+      }
+
+      if (usedAutoTable) {
+        page.stage = 'review';
+        selectPage(i);
+        renderPageTabs();
+      } else {
+        page.stage = 'grid';
+        selectPage(i);
+        renderPageTabs();
+        await suggestGridForCurrentPage();
+        initCellsFromGrid(page);
+        page.stage = 'review';
+        selectPage(i);
+        renderPageTabs();
+        await runOcrForPage(page);
+      }
       page.stage = 'done';
       renderPageTabs();
       updateExportSummary();
@@ -385,6 +398,7 @@ function initCellsFromGrid(page) {
   const numCols = page.cols.length - 1;
   page.numRows = numRows;
   page.numCols = numCols;
+  page.reconStrategy = 'grid';
   page.cells = [];
   for (let r = 0; r < numRows; r += 1) {
     for (let c = 0; c < numCols; c += 1) {
@@ -415,17 +429,23 @@ function buildCoverageMap(page) {
   return covered;
 }
 
+function gridMatchesCells(page) {
+  return page.rows.length - 1 === page.numRows && page.cols.length - 1 === page.numCols;
+}
+
 function renderReviewStage(page) {
+  const canReOcr = gridMatchesCells(page);
+  const banner = page.reconStrategy === 'text'
+    ? '系統已自動辨識文字內容並組成表格。請對照左側原圖檢查右側表格，可直接點擊儲存格修改文字，或拖曳選取範圍合併/取消合併儲存格。如果整體結構明顯錯亂，點「重設格線」改用手動格線方式重新處理。'
+    : '系統已自動偵測格線並辨識文字。請對照左側原圖檢查右側表格，可直接點擊儲存格修改文字。如果格線切得不對（常見於反光、傾斜或模糊的照片），點「重設格線」手動調整後再重新辨識即可。';
+
   workspaceEl.innerHTML = `
-    <p class="status-text">
-      系統已自動偵測格線並辨識文字。請對照左側原圖檢查右側表格，可直接點擊儲存格修改文字。
-      如果格線切得不對（常見於反光、傾斜或模糊的照片），點「重設格線」手動調整後再重新辨識即可。
-    </p>
+    <p class="status-text">${banner}</p>
     <div class="stage-toolbar">
       <button class="secondary-btn" id="btn-back-grid">重設格線</button>
       <button class="secondary-btn" id="btn-merge">合併選取儲存格</button>
       <button class="secondary-btn" id="btn-unmerge">取消合併</button>
-      <button class="primary-btn" id="btn-run-ocr">重新辨識 (OCR)</button>
+      <button class="primary-btn" id="btn-run-ocr" ${canReOcr ? '' : 'disabled title="請先按「重設格線」設定手動格線後才能重新辨識"'}>重新辨識 (OCR)</button>
       <button class="secondary-btn" id="btn-mark-done">標記此圖片完成 ✓</button>
       <span class="status-text" id="ocr-status"></span>
     </div>
@@ -436,10 +456,13 @@ function renderReviewStage(page) {
     </div>
   `;
 
-  document.getElementById('btn-back-grid').onclick = () => {
+  document.getElementById('btn-back-grid').onclick = async () => {
     page.stage = 'grid';
     renderPageTabs();
     renderGridStage(page);
+    if (page.rows.length <= 2 && page.cols.length <= 2) {
+      await suggestGridForCurrentPage();
+    }
   };
   document.getElementById('btn-run-ocr').onclick = () => runOcrForPage(page);
   document.getElementById('btn-merge').onclick = () => mergeSelection(page);

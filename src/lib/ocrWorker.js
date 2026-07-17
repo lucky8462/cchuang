@@ -71,8 +71,18 @@ async function recognizeText(imageBuffer, { psm = '7' } = {}) {
   });
 }
 
+// psm 11 = sparse text, no assumed layout - returns raw word/line/block
+// boxes (with per-word confidence) for the caller to reconstruct table
+// structure from, rather than a single flattened text string.
+async function recognizeLayout(imagePath) {
+  return pool.withWorker(async (worker) => {
+    await worker.setParameters({ tessedit_pageseg_mode: '11' });
+    return worker.recognize(imagePath, {}, { blocks: true, text: true });
+  });
+}
+
 async function warmUp() {
   await pool.init();
 }
 
-module.exports = { recognizeText, warmUp };
+module.exports = { recognizeText, recognizeLayout, warmUp };
