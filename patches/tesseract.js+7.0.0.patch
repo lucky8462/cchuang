@@ -1,0 +1,21 @@
+diff --git a/node_modules/tesseract.js/src/worker-script/node/getCore.js b/node_modules/tesseract.js/src/worker-script/node/getCore.js
+index 3c1d4cb..b1e469a 100644
+--- a/node_modules/tesseract.js/src/worker-script/node/getCore.js
++++ b/node_modules/tesseract.js/src/worker-script/node/getCore.js
+@@ -12,8 +12,14 @@ module.exports = async (oem, _, res) => {
+   if (TesseractCore === null) {
+     const statusText = 'loading tesseract core';
+ 
+-    const simdSupport = await simd();
+-    const relaxedSimdSupport = await relaxedSimd();
++    // Both wasm SIMD variants are unreliable on this host: relaxed-simd
++    // aborts outright ("missing function: ..DotProductSSE.."), and the
++    // plain simd core loads but produces inconsistent/corrupted-looking
++    // recognition results that vary from one process start to the next on
++    // identical input. Forcing the fully scalar core trades some speed for
++    // correctness and determinism.
++    const simdSupport = false;
++    const relaxedSimdSupport = false;
+     res.progress({ status: statusText, progress: 0 });
+     if (relaxedSimdSupport) {
+       if ([OEM.DEFAULT, OEM.LSTM_ONLY].includes(oem)) {

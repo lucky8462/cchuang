@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>圖片 OCR 轉 Word</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<header class="app-header">
+  <h1>圖片 OCR 轉 Word 系統</h1>
+  <p class="subtitle">上傳一張或多張圖片，辨識表格內容並產生可編輯、可複製文字的 Word 文件</p>
+</header>
+
+<main id="app">
+
+  <section id="upload-section" class="panel">
+    <h2>步驟一：選擇圖片</h2>
+    <div id="dropzone" class="dropzone">
+      <p>將圖片拖曳到這裡，或點擊選擇檔案</p>
+      <input id="file-input" type="file" accept="image/*" multiple />
+    </div>
+    <div id="upload-list" class="upload-list"></div>
+    <button id="start-btn" class="primary-btn" disabled>開始處理</button>
+  </section>
+
+  <section id="workspace-section" class="panel" hidden>
+    <h2>步驟二：確認格線與校對內容</h2>
+    <div class="page-tabs" id="page-tabs"></div>
+
+    <div id="page-workspace"></div>
+  </section>
+
+  <section id="export-section" class="panel" hidden>
+    <h2>步驟三：產生 Word 文件</h2>
+    <p>已完成 <span id="done-count">0</span> / <span id="total-count">0</span> 張圖片的校對。</p>
+    <label>
+      檔名：
+      <input id="export-filename" type="text" value="OCR轉換結果" />
+    </label>
+    <button id="export-btn" class="primary-btn">下載 Word 文件</button>
+    <div id="export-status"></div>
+  </section>
+
+</main>
+
+<template id="page-tab-template">
+  <button class="page-tab">
+    <img class="page-tab-thumb" />
+    <span class="page-tab-label"></span>
+    <span class="page-tab-status"></span>
+  </button>
+</template>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
