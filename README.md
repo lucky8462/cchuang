@@ -44,6 +44,25 @@ npm start
 
 產出的 Word 文件中的表格為真正的 Word 表格（非圖片），文字皆可自由編輯與複製。
 
+## 部署給別人使用（Render / Railway）
+
+這個系統需要一台「持續運作」的伺服器（會在記憶體中保留已上傳的圖片與 OCR 引擎狀態），不適合純靜態或 serverless 平台，但很適合 Render、Railway 這類會啟動一個持續運行容器的平台，程式碼不需要修改。
+
+### Render
+
+1. 到 [render.com](https://render.com) 用 GitHub 帳號登入，選擇這個 repository。
+2. Render 會偵測到 repo 內的 `render.yaml` 並自動帶入設定（build command: `npm install`，start command: `npm start`，分支：`claude/image-ocr-to-word-z82aqf`）。若要手動設定，Runtime 選 Node，其餘同上。
+3. 選擇免費方案（Free）即可，部署完成後 Render 會給一個 `https://xxx.onrender.com` 的公開網址，貼給別人就能用。
+4. 免費方案閒置一段時間會休眠，下次有人開啟時需要等待約 30-60 秒喚醒（之後 OCR 引擎還會再花約 30-90 秒初始化，此為程式啟動時自動處理，無需手動操作）。
+
+### Railway
+
+1. 到 [railway.app](https://railway.app) 用 GitHub 帳號登入，選擇這個 repository 與分支。
+2. Railway 會自動偵測 Node.js 專案，直接使用 `package.json` 裡的 `start` 指令，通常不需要額外設定。
+3. 部署完成後在 Settings 產生一個公開網域（Generate Domain），即可取得公開連結。
+
+兩個平台都有免費額度，但都是「共用資源」等級，多人同時上傳/辨識圖片時速度會變慢；若使用量增加，建議升級到付費方案取得更穩定的 CPU 資源（OCR 運算較吃 CPU）。
+
 ## 已知限制
 
 - 自動格線偵測僅供參考起點，對於翻拍模糊、反光或傾斜的照片可能不準確，請務必手動核對調整。

@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: image-ocr-to-word
+    runtime: node
+    plan: free
+    branch: claude/image-ocr-to-word-z82aqf
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
