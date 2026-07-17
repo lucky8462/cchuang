@@ -552,11 +552,31 @@ const retryBtn = document.getElementById('retry-btn');
 let successfulPages = []; // { fileEntry, page }
 let lastFailedEntries = []; // { file } queue entries that still need retrying
 
+// Gemini's shared/free-tier models can genuinely take anywhere from a
+// few seconds to a couple of minutes to respond when busy (measured live:
+// gemini-flash-latest ranged from ~15s to ~110s for the same request) -
+// with no in-between status from the API itself while a request is
+// pending. Left as a bare spinner, that reads as a hang. This surfaces an
+// elapsed-time counter once the wait passes a threshold so it's clear the
+// page is still working, not stuck.
+const SLOW_WAIT_THRESHOLD_MS = 8000;
+function startWaitTimer(fileName) {
+  const startedAt = Date.now();
+  const intervalId = setInterval(() => {
+    const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+    if (elapsedSec * 1000 >= SLOW_WAIT_THRESHOLD_MS) {
+      progressText.textContent = `正在辨識 ${fileName}...（已等待 ${elapsedSec} 秒，Gemini 目前回應較慢屬正常現象，最長可能需要 1-2 分鐘，請耐心等候）`;
+    }
+  }, 1000);
+  return () => clearInterval(intervalId);
+}
+
 async function recognizeEntries(entries) {
   const newlyFailed = [];
   for (let i = 0; i < entries.length; i += 1) {
     const { file } = entries[i];
     setProgress(`正在辨識第 ${i + 1}/${entries.length} 張圖片...`, i / entries.length);
+    const stopWaitTimer = startWaitTimer(file.name);
     try {
       const base64 = await fileToBase64(file);
       const mimeType = file.type || 'image/jpeg';
@@ -576,6 +596,8 @@ async function recognizeEntries(entries) {
     } catch (err) {
       newlyFailed.push(entries[i]);
       logProgress(`✗ ${file.name} 辨識失敗：${err.message}`);
+    } finally {
+      stopWaitTimer();
     }
   }
   return newlyFailed;
