@@ -138,8 +138,24 @@ startBtn.addEventListener('click', async () => {
     document.getElementById('workspace-section').hidden = false;
     document.getElementById('export-section').hidden = false;
     renderPageTabs();
+
+    // Fully automatic by default: build the cell grid from the detected
+    // lines and run OCR immediately for every page, no clicks required.
+    // The grid/merge editor stays reachable afterwards for anyone whose
+    // photo confuses auto-detection (glare, heavy tilt, blur) and needs a
+    // quick manual fix - but it is no longer a mandatory gate.
+    for (let i = 0; i < pages.length; i += 1) {
+      const page = pages[i];
+      initCellsFromGrid(page);
+      page.stage = 'review';
+      selectPage(i);
+      renderPageTabs();
+      await runOcrForPage(page);
+      page.stage = 'done';
+      renderPageTabs();
+      updateExportSummary();
+    }
     selectPage(0);
-    updateExportSummary();
   } catch (err) {
     alert(`處理失敗: ${err.message}`);
   } finally {
@@ -401,11 +417,15 @@ function buildCoverageMap(page) {
 
 function renderReviewStage(page) {
   workspaceEl.innerHTML = `
+    <p class="status-text">
+      系統已自動偵測格線並辨識文字。請對照左側原圖檢查右側表格，可直接點擊儲存格修改文字。
+      如果格線切得不對（常見於反光、傾斜或模糊的照片），點「重設格線」手動調整後再重新辨識即可。
+    </p>
     <div class="stage-toolbar">
-      <button class="secondary-btn" id="btn-back-grid">回上一步（重設格線）</button>
+      <button class="secondary-btn" id="btn-back-grid">重設格線</button>
       <button class="secondary-btn" id="btn-merge">合併選取儲存格</button>
       <button class="secondary-btn" id="btn-unmerge">取消合併</button>
-      <button class="primary-btn" id="btn-run-ocr">開始辨識 (OCR)</button>
+      <button class="primary-btn" id="btn-run-ocr">重新辨識 (OCR)</button>
       <button class="secondary-btn" id="btn-mark-done">標記此圖片完成 ✓</button>
       <span class="status-text" id="ocr-status"></span>
     </div>
