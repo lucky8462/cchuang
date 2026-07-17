@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>圖片轉 Word 表格（免後端・全瀏覽器運行）</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/docx@9.7.1/dist/index.umd.cjs"></script>
+<style>
+  .dropzone.dragover { border-color: #2563eb; background-color: #eff6ff; }
+  .spinner {
+    border: 3px solid #e5e7eb; border-top-color: #2563eb; border-radius: 9999px;
+    width: 1rem; height: 1rem; animation: spin 0.8s linear infinite; display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+  <header class="mb-6">
+    <h1 class="text-2xl font-bold text-slate-900">圖片轉 Word 表格</h1>
+    <p class="text-slate-500 mt-1">免後端・完全在瀏覽器內運行。上傳表格圖片，使用 Gemini 辨識內容，直接產生可編輯、可複製文字的 Word (.docx) 表格。</p>
+  </header>
+
+  <!-- Settings -->
+  <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-5">
+    <h2 class="font-semibold text-slate-900 mb-3">設定</h2>
+    <label class="block text-sm font-medium text-slate-600 mb-1">Gemini API Key</label>
+    <div class="flex gap-2">
+      <div class="relative flex-1">
+        <input id="api-key-input" type="password"
+          class="w-full border border-slate-300 rounded-lg px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="貼上你的 Gemini API Key" autocomplete="off" />
+        <button id="toggle-key-visibility" type="button"
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-800 px-2 py-1">
+          顯示
+        </button>
+      </div>
+    </div>
+    <p class="text-xs text-slate-400 mt-2">
+      API Key 只會儲存在你目前瀏覽器的 LocalStorage 內，並直接從瀏覽器送到 Google 的 Gemini API，本工具沒有後端伺服器，不會經手或儲存你的金鑰。
+      可到 <a class="text-blue-600 underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 免費申請。
+    </p>
+  </section>
+
+  <!-- Upload -->
+  <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-5">
+    <h2 class="font-semibold text-slate-900 mb-3">上傳圖片</h2>
+
+    <div id="dropzone"
+      class="dropzone border-2 border-dashed border-slate-300 rounded-lg py-10 text-center text-slate-500 cursor-pointer relative transition-colors">
+      <p>將圖片拖曳到這裡，或點擊選擇檔案</p>
+      <p class="text-xs text-slate-400 mt-1">支援 JPG / PNG，可一次選擇多張</p>
+      <input id="file-input" type="file" accept="image/jpeg,image/jpg,image/png" multiple
+        class="absolute inset-0 opacity-0 cursor-pointer" />
+    </div>
+
+    <div id="file-list" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mt-4"></div>
+
+    <div class="flex gap-3 mt-4">
+      <button id="convert-btn" disabled
+        class="bg-blue-600 disabled:bg-slate-300 text-white font-medium px-5 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:cursor-not-allowed">
+        開始轉換
+      </button>
+      <button id="clear-btn"
+        class="bg-white border border-slate-300 text-slate-700 font-medium px-5 py-2 rounded-lg text-sm hover:bg-slate-50">
+        清除全部
+      </button>
+    </div>
+  </section>
+
+  <!-- Progress -->
+  <section id="progress-section" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-5" hidden>
+    <h2 class="font-semibold text-slate-900 mb-3">處理進度</h2>
+    <div class="flex items-center gap-2 text-sm text-slate-600 mb-2">
+      <span id="progress-spinner" class="spinner"></span>
+      <span id="progress-text">準備中...</span>
+    </div>
+    <div class="w-full bg-slate-200 rounded-full h-2">
+      <div id="progress-bar" class="bg-blue-600 h-2 rounded-full transition-all" style="width:0%"></div>
+    </div>
+    <ul id="progress-log" class="text-xs text-slate-500 mt-3 space-y-1"></ul>
+  </section>
+
+  <!-- Result -->
+  <section id="result-section" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5" hidden>
+    <h2 class="font-semibold text-slate-900 mb-3">下載 Word 文件</h2>
+    <div class="flex items-center gap-2">
+      <label class="text-sm text-slate-600">檔名：</label>
+      <input id="filename-input" type="text" value="通訊錄表格"
+        class="border border-slate-300 rounded-lg px-3 py-2 text-sm flex-1 max-w-xs" />
+      <button id="download-btn"
+        class="bg-emerald-600 text-white font-medium px-5 py-2 rounded-lg text-sm hover:bg-emerald-700">
+        下載 .docx
+      </button>
+    </div>
+    <p id="result-warning" class="text-xs text-amber-600 mt-2"></p>
+  </section>
+
+</div>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------
+
+const files = []; // { id, file, previewUrl }
+let generatedDocxBlob = null;
+
+// ---------------------------------------------------------------------
+// API key: persisted only in this browser's LocalStorage, never sent
+// anywhere except directly to Google's Gemini endpoint below.
+// ---------------------------------------------------------------------
+
+const API_KEY_STORAGE_KEY = 'gemini_ocr_api_key';
+const apiKeyInput = document.getElementById('api-key-input');
+const toggleKeyBtn = document.getElementById('toggle-key-visibility');
+
+apiKeyInput.value = localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+apiKeyInput.addEventListener('input', () => {
+  localStorage.setItem(API_KEY_STORAGE_KEY, apiKeyInput.value.trim());
+});
+toggleKeyBtn.addEventListener('click', () => {
+  const showing = apiKeyInput.type === 'text';
+  apiKeyInput.type = showing ? 'password' : 'text';
+  toggleKeyBtn.textContent = showing ? '顯示' : '隱藏';
+});
+
+// ---------------------------------------------------------------------
+// Upload queue
+// ---------------------------------------------------------------------
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+const fileListEl = document.getElementById('file-list');
+const convertBtn = document.getElementById('convert-btn');
+const clearBtn = document.getElementById('clear-btn');
+
+['dragenter', 'dragover'].forEach((evt) => {
+  dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach((evt) => {
+  dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); });
+});
+dropzone.addEventListener('drop', (e) => addFiles(e.dataTransfer.files));
+fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+
+function addFiles(fileList) {
+  for (const file of fileList) {
+    if (!/^image\/(jpe?g|png)$/.test(file.type)) continue;
+    files.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, file, previewUrl: URL.createObjectURL(file) });
+  }
+  renderFileList();
+}
+
+function removeFile(id) {
+  const idx = files.findIndex((f) => f.id === id);
+  if (idx !== -1) {
+    URL.revokeObjectURL(files[idx].previewUrl);
+    files.splice(idx, 1);
+  }
+  renderFileList();
+}
+
+function renderFileList() {
+  fileListEl.innerHTML = '';
+  files.forEach((f) => {
+    const card = document.createElement('div');
+    card.className = 'relative border border-slate-200 rounded-lg overflow-hidden bg-slate-50';
+    card.innerHTML = `
+      <img src="${f.previewUrl}" class="w-full h-24 object-cover" />
+      <div class="px-2 py-1 text-xs text-slate-600 truncate">${escapeHtml(f.file.name)}</div>
+      <button data-id="${f.id}" class="remove-file-btn absolute top-1 right-1 bg-white/90 rounded-full w-6 h-6 text-xs text-red-600 hover:bg-white">✕</button>
+    `;
+    card.querySelector('.remove-file-btn').addEventListener('click', () => removeFile(f.id));
+    fileListEl.appendChild(card);
+  });
+  convertBtn.disabled = files.length === 0;
+}
+
+clearBtn.addEventListener('click', () => {
+  files.forEach((f) => URL.revokeObjectURL(f.previewUrl));
+  files.length = 0;
+  renderFileList();
+  hideProgress();
+  hideResult();
+});
+
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, (m) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[m]));
+}
+
+// ---------------------------------------------------------------------
+// Progress UI
+// ---------------------------------------------------------------------
+
+const progressSection = document.getElementById('progress-section');
+const progressText = document.getElementById('progress-text');
+const progressBar = document.getElementById('progress-bar');
+const progressSpinner = document.getElementById('progress-spinner');
+const progressLog = document.getElementById('progress-log');
+
+function showProgress() { progressSection.hidden = false; progressLog.innerHTML = ''; }
+function hideProgress() { progressSection.hidden = true; }
+function setProgress(text, fraction) {
+  progressText.textContent = text;
+  progressBar.style.width = `${Math.round(fraction * 100)}%`;
+}
+function logProgress(text) {
+  const li = document.createElement('li');
+  li.textContent = text;
+  progressLog.appendChild(li);
+}
+function finishProgress() { progressSpinner.style.display = 'none'; }
+
+// ---------------------------------------------------------------------
+// Result / download UI
+// ---------------------------------------------------------------------
+
+const resultSection = document.getElementById('result-section');
+const resultWarning = document.getElementById('result-warning');
+const filenameInput = document.getElementById('filename-input');
+const downloadBtn = document.getElementById('download-btn');
+
+function hideResult() { resultSection.hidden = true; generatedDocxBlob = null; }
+function showResult(warningText) {
+  resultSection.hidden = false;
+  resultWarning.textContent = warningText || '';
+}
+
+downloadBtn.addEventListener('click', () => {
+  if (!generatedDocxBlob) return;
+  const name = (filenameInput.value || '通訊錄表格').replace(/[\\/:*?"<>|]/g, '_');
+  const url = URL.createObjectURL(generatedDocxBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name}.docx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+// ---------------------------------------------------------------------
+// Image -> base64
+// ---------------------------------------------------------------------
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      const base64 = result.slice(result.indexOf(',') + 1);
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Gemini Vision call
+// ---------------------------------------------------------------------
+
+const GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_PROMPT = `你是一個精確的表格辨識引擎。請仔細觀察這張圖片中的表格（可能是拍照或截圖），並將表格內容完整、逐字轉換成 JSON 資料，規則如下：
+
+1. 只回傳 JSON，不要有任何說明文字或 Markdown 標記。
+2. JSON 結構固定如下：
+{
+  "title": "表格標題（若有，沒有則留空字串）",
+  "numRows": <表格總列數，整數>,
+  "numCols": <表格總欄數，整數>,
+  "cells": [
+    {
+      "row": <此儲存格左上角的列索引，從 0 開始>,
+      "col": <此儲存格左上角的欄索引，從 0 開始>,
+      "rowSpan": <向下合併的列數，預設 1>,
+      "colSpan": <向右合併的欄數，預設 1>,
+      "text": "<儲存格內文字，完全依照圖片原文，包含數字、符號、括號等，不要自行翻譯或增刪內容>",
+      "bold": <此儲存格是否為標題/粗體樣式的布林值>,
+      "shade": "<若儲存格有底色，填入接近的十六進位色碼如 F2F2F2；沒有則留空字串>"
+    }
+  ]
+}
+3. cells 陣列只需列出每個合併儲存格「左上角」那一格，不要為被合併覆蓋的其餘位置重複輸出。
+4. 數字（例如電話號碼、分機號碼）必須逐字辨識，不可四捨五入或省略前導 0，連字號、括號等符號也要保留。
+5. 若儲存格是空白，仍可省略不輸出（表示該位置為空）。
+6. 表格的列數與欄數請以實際看到的格線/欄位對齊情況為準，盡量與原圖的視覺配置一致。`;
+
+async function recognizeImageWithGemini(base64Data, mimeType, apiKey) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = {
+    contents: [{
+      parts: [
+        { text: GEMINI_PROMPT },
+        { inlineData: { mimeType, data: base64Data } },
+      ],
+    }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      temperature: 0.1,
+    },
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data?.error?.message || `Gemini API 錯誤 (HTTP ${response.status})`;
+    throw new Error(message);
+  }
+
+  const candidate = data?.candidates?.[0];
+  const finishReason = candidate?.finishReason;
+  const text = candidate?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text) {
+    if (finishReason === 'SAFETY') throw new Error('內容被安全過濾器阻擋，請換一張圖片');
+    throw new Error('Gemini 沒有回傳可用的內容');
+  }
+
+  const jsonText = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '');
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (err) {
+    throw new Error(`Gemini 回傳的內容不是有效的 JSON: ${err.message}`);
+  }
+
+  if (!Array.isArray(parsed.cells) || !parsed.numRows || !parsed.numCols) {
+    throw new Error('Gemini 回傳的表格結構不完整');
+  }
+  return parsed;
+}
+
+// ---------------------------------------------------------------------
+// docx.js table generation
+// ---------------------------------------------------------------------
+
+const FONT_NAME = 'Microsoft JhengHei';
+
+function buildCellsFromGeminiTable(table) {
+  return (table.cells || [])
+    .filter((c) => Number.isInteger(c.row) && Number.isInteger(c.col))
+    .map((c) => ({
+      r: c.row,
+      c: c.col,
+      rowSpan: Math.max(1, c.rowSpan || 1),
+      colSpan: Math.max(1, c.colSpan || 1),
+      text: String(c.text ?? ''),
+      bold: !!c.bold,
+      shade: c.shade && /^[0-9a-fA-F]{6}$/.test(c.shade) ? c.shade : undefined,
+    }));
+}
+
+function buildDocxCell(cell) {
+  const lines = cell.text.split('\n');
+  return new docx.TableCell({
+    columnSpan: cell.colSpan > 1 ? cell.colSpan : undefined,
+    rowSpan: cell.rowSpan > 1 ? cell.rowSpan : undefined,
+    shading: cell.shade ? { fill: cell.shade } : undefined,
+    verticalAlign: docx.VerticalAlign.CENTER,
+    margins: { top: 60, bottom: 60, left: 80, right: 80 },
+    children: (lines.length ? lines : ['']).map((line) => new docx.Paragraph({
+      alignment: docx.AlignmentType.CENTER,
+      children: [new docx.TextRun({
+        text: line, bold: cell.bold, font: FONT_NAME, size: 21,
+      })],
+    })),
+  });
+}
+
+function buildDocxTable(pageTable) {
+  const { numRows, numCols, cells } = pageTable;
+  const covered = Array.from({ length: numRows }, () => new Array(numCols).fill(false));
+  const byRow = Array.from({ length: numRows }, () => []);
+  for (const cell of cells) {
+    if (cell.r >= 0 && cell.r < numRows && cell.c >= 0 && cell.c < numCols) byRow[cell.r].push(cell);
+  }
+  byRow.forEach((row) => row.sort((a, b) => a.c - b.c));
+
+  const rows = [];
+  for (let r = 0; r < numRows; r += 1) {
+    const rowCells = [];
+    let c = 0;
+    const anchors = new Map(byRow[r].map((cell) => [cell.c, cell]));
+    while (c < numCols) {
+      if (covered[r][c]) { c += 1; continue; }
+      const cell = anchors.get(c) || {
+        r, c, rowSpan: 1, colSpan: 1, text: '',
+      };
+      const rowSpan = Math.min(cell.rowSpan, numRows - r);
+      const colSpan = Math.min(cell.colSpan, numCols - c);
+      for (let rr = r; rr < r + rowSpan; rr += 1) {
+        for (let cc = c; cc < c + colSpan; cc += 1) covered[rr][cc] = true;
+      }
+      rowCells.push(buildDocxCell({ ...cell, rowSpan, colSpan }));
+      c += colSpan;
+    }
+    rows.push(new docx.TableRow({ children: rowCells }));
+  }
+
+  const columnWidths = new Array(numCols).fill(Math.floor(13000 / numCols));
+  return new docx.Table({
+    rows,
+    width: { size: 100, type: docx.WidthType.PERCENTAGE },
+    columnWidths,
+    borders: {
+      top: { style: docx.BorderStyle.SINGLE, size: 2, color: '999999' },
+      bottom: { style: docx.BorderStyle.SINGLE, size: 2, color: '999999' },
+      left: { style: docx.BorderStyle.SINGLE, size: 2, color: '999999' },
+      right: { style: docx.BorderStyle.SINGLE, size: 2, color: '999999' },
+      insideHorizontal: { style: docx.BorderStyle.SINGLE, size: 2, color: '999999' },
+      insideVertical: { style: docx.BorderStyle.SINGLE, size: 2, color: '999999' },
+    },
+  });
+}
+
+async function buildDocxDocument(pages) {
+  const children = [];
+  pages.forEach((page, idx) => {
+    if (idx > 0) children.push(new docx.Paragraph({ children: [new docx.PageBreak()] }));
+    if (page.title) {
+      children.push(new docx.Paragraph({
+        heading: docx.HeadingLevel.HEADING_2,
+        alignment: docx.AlignmentType.CENTER,
+        children: [new docx.TextRun({ text: page.title, font: FONT_NAME, bold: true })],
+      }));
+    }
+    children.push(buildDocxTable(page));
+    children.push(new docx.Paragraph({ children: [] }));
+  });
+
+  const doc = new docx.Document({
+    sections: [{
+      properties: {
+        page: { size: { orientation: docx.PageOrientation.LANDSCAPE } },
+      },
+      children,
+    }],
+    styles: {
+      default: { document: { run: { font: FONT_NAME, size: 21 } } },
+    },
+  });
+
+  return docx.Packer.toBlob(doc);
+}
+
+// ---------------------------------------------------------------------
+// Main conversion flow
+// ---------------------------------------------------------------------
+
+convertBtn.addEventListener('click', async () => {
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) {
+    alert('請先在上方輸入你的 Gemini API Key');
+    return;
+  }
+  if (files.length === 0) return;
+
+  convertBtn.disabled = true;
+  clearBtn.disabled = true;
+  hideResult();
+  showProgress();
+  progressSpinner.style.display = 'inline-block';
+
+  const pages = [];
+  const failures = [];
+
+  for (let i = 0; i < files.length; i += 1) {
+    const { file } = files[i];
+    setProgress(`正在辨識第 ${i + 1}/${files.length} 張圖片...`, i / files.length);
+    try {
+      const base64 = await fileToBase64(file);
+      const mimeType = file.type || 'image/jpeg';
+      const table = await recognizeImageWithGemini(base64, mimeType, apiKey);
+      pages.push({
+        title: table.title || '',
+        numRows: table.numRows,
+        numCols: table.numCols,
+        cells: buildCellsFromGeminiTable(table),
+      });
+      logProgress(`✓ ${file.name} 辨識完成（${table.numRows} 列 × ${table.numCols} 欄）`);
+    } catch (err) {
+      failures.push({ name: file.name, message: err.message });
+      logProgress(`✗ ${file.name} 辨識失敗：${err.message}`);
+    }
+  }
+
+  if (pages.length === 0) {
+    setProgress('全部圖片都辨識失敗，請確認 API Key 或圖片內容後再試一次', 1);
+    finishProgress();
+    convertBtn.disabled = false;
+    clearBtn.disabled = false;
+    return;
+  }
+
+  setProgress('正在產生 Word 文件...', 0.95);
+  try {
+    generatedDocxBlob = await buildDocxDocument(pages);
+    setProgress('完成！', 1);
+    finishProgress();
+    const warning = failures.length
+      ? `注意：有 ${failures.length} 張圖片辨識失敗，未包含在產出的 Word 文件中（${failures.map((f) => f.name).join('、')}）。`
+      : '';
+    showResult(warning);
+  } catch (err) {
+    setProgress(`產生 Word 文件時發生錯誤：${err.message}`, 1);
+    finishProgress();
+  }
+
+  convertBtn.disabled = false;
+  clearBtn.disabled = false;
+});
+</script>
+
+</body>
+</html>
