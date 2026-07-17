@@ -275,17 +275,20 @@ function fileToBase64(file) {
 // Gemini Vision call
 // ---------------------------------------------------------------------
 
-// gemini-1.5-flash has been retired. "-latest" aliases are the most
-// portable choice since different API keys/projects have access to
-// different pinned model versions depending on when they were created
-// (verified live: a fresh key got 404 "no longer available to new users"
-// on gemini-2.5-flash but worked fine on this alias) - but a popular
-// "-latest" alias is also the one most likely to be under heavy load
-// from everyone else defaulting to it. So rather than retrying the SAME
-// overloaded model, fall through to alternates in order; only the first
-// one that actually responds gets used for a given image.
+// gemini-1.5-flash has been retired. Verified live against a real
+// free-tier key: pinned versions like gemini-2.0-flash-001 and
+// gemini-2.0-flash-lite immediately 429 ("exceeded your current quota")
+// and gemini-2.5-flash/-lite 404 ("no longer available to new users") -
+// free-tier keys seem to only get quota against the "-latest" aliases.
+// Of those, gemini-flash-lite-latest responded in ~15s with excellent
+// OCR quality in testing, while gemini-flash-latest is higher quality
+// but was measured taking 45s+ and occasionally 503 ("high demand") when
+// under load - so it's tried first for quality but flash-lite-latest is
+// right behind it as a fast, reliable fallback. The pinned versions stay
+// at the end in case a given key/project's quota is set up differently.
 const GEMINI_MODEL_CANDIDATES = [
   'gemini-flash-latest',
+  'gemini-flash-lite-latest',
   'gemini-2.0-flash-001',
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite-001',
@@ -325,9 +328,21 @@ const MAX_RETRIES_PER_MODEL = 1;
 const RETRYABLE_STATUS = new Set([429, 503]);
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
-function isRetryableError(status, message) {
-  if (RETRYABLE_STATUS.has(status)) return true;
-  return /high demand|overloaded|unavailable|try again/i.test(message || '');
+// Three distinct outcomes, not two:
+//  - 'retryable': transient overload on THIS model - worth a short retry
+//    on the same model before giving up on it.
+//  - 'model_unavailable': this specific model name is wrong/retired/not
+//    granted to this API key (404, "no longer available to new users",
+//    etc.) - retrying it is pointless, but OTHER candidate models are
+//    unaffected, so just move on to the next one.
+//  - 'fatal': applies regardless of which model is used (bad API key,
+//    safety block, malformed request) - trying another model cannot help,
+//    so stop immediately instead of burning through the whole list.
+function classifyError(status, message) {
+  const msg = message || '';
+  if (RETRYABLE_STATUS.has(status) || /high demand|overloaded|try again/i.test(msg)) return 'retryable';
+  if (status === 404 || /not found|no longer available/i.test(msg)) return 'model_unavailable';
+  return 'fatal';
 }
 
 async function callGeminiOnce(url, body) {
@@ -340,7 +355,7 @@ async function callGeminiOnce(url, body) {
   if (!response.ok) {
     const message = data?.error?.message || `Gemini API 錯誤 (HTTP ${response.status})`;
     const err = new Error(message);
-    err.retryable = isRetryableError(response.status, message);
+    err.errorType = classifyError(response.status, message);
     throw err;
   }
   return data;
@@ -355,17 +370,17 @@ async function callGeminiWithFallback(body, onStatus) {
         return await callGeminiOnce(url, body);
       } catch (err) {
         lastErr = err;
-        if (err.retryable && attempt < MAX_RETRIES_PER_MODEL) {
+        if (err.errorType === 'retryable' && attempt < MAX_RETRIES_PER_MODEL) {
           const waitMs = 2000 * (2 ** attempt);
           if (onStatus) onStatus(`模型 ${model} 忙碌中，${Math.round(waitMs / 1000)} 秒後重試...`);
           await sleep(waitMs);
           continue;
         }
-        if (err.retryable) {
-          if (onStatus) onStatus(`模型 ${model} 持續忙碌，改用其他模型嘗試...`);
+        if (err.errorType === 'retryable' || err.errorType === 'model_unavailable') {
+          if (onStatus) onStatus(`模型 ${model} 無法使用，改用其他模型嘗試...`);
           break; // fall through to the next candidate model
         }
-        throw err; // non-retryable (bad key, safety block, etc.) - stop immediately
+        throw err; // fatal (bad key, safety block, etc.) - stop immediately
       }
     }
   }
