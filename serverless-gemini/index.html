@@ -268,7 +268,12 @@ function fileToBase64(file) {
 // Gemini Vision call
 // ---------------------------------------------------------------------
 
-const GEMINI_MODEL = 'gemini-1.5-flash';
+// gemini-1.5-flash has been retired; "-latest" aliases are the most
+// portable choice since different API keys/projects have access to
+// different pinned model versions depending on when they were created
+// (verified live: a fresh key got 404 "no longer available to new users"
+// on gemini-2.5-flash but worked fine on this alias).
+const GEMINI_MODEL = 'gemini-flash-latest';
 const GEMINI_PROMPT = `你是一個精確的表格辨識引擎。請仔細觀察這張圖片中的表格（可能是拍照或截圖），並將表格內容完整、逐字轉換成 JSON 資料，規則如下：
 
 1. 只回傳 JSON，不要有任何說明文字或 Markdown 標記。

@@ -4,3 +4,4 @@ uploads/
 tmp/
 *.log
 .DS_Store
+test_gemini_real.js
