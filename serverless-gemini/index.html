@@ -275,12 +275,21 @@ function fileToBase64(file) {
 // Gemini Vision call
 // ---------------------------------------------------------------------
 
-// gemini-1.5-flash has been retired; "-latest" aliases are the most
+// gemini-1.5-flash has been retired. "-latest" aliases are the most
 // portable choice since different API keys/projects have access to
 // different pinned model versions depending on when they were created
 // (verified live: a fresh key got 404 "no longer available to new users"
-// on gemini-2.5-flash but worked fine on this alias).
-const GEMINI_MODEL = 'gemini-flash-latest';
+// on gemini-2.5-flash but worked fine on this alias) - but a popular
+// "-latest" alias is also the one most likely to be under heavy load
+// from everyone else defaulting to it. So rather than retrying the SAME
+// overloaded model, fall through to alternates in order; only the first
+// one that actually responds gets used for a given image.
+const GEMINI_MODEL_CANDIDATES = [
+  'gemini-flash-latest',
+  'gemini-2.0-flash-001',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite-001',
+];
 const GEMINI_PROMPT = `你是一個精確的表格辨識引擎。請仔細觀察這張圖片中的表格（可能是拍照或截圖），並將表格內容完整、逐字轉換成 JSON 資料，規則如下：
 
 1. 只回傳 JSON，不要有任何說明文字或 Markdown 標記。
@@ -309,8 +318,10 @@ const GEMINI_PROMPT = `你是一個精確的表格辨識引擎。請仔細觀察
 // Free-tier / "-latest" alias models occasionally return a transient
 // overload error ("This model is currently experiencing high demand...").
 // Google's own message says to just try again, so a short automatic
-// retry with backoff clears most of these without any user action.
-const MAX_RETRIES = 3;
+// retry with backoff clears most of these without any user action -
+// combined with falling through to the next candidate model (above) if
+// one particular model stays overloaded across its retries.
+const MAX_RETRIES_PER_MODEL = 1;
 const RETRYABLE_STATUS = new Set([429, 503]);
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
@@ -335,8 +346,36 @@ async function callGeminiOnce(url, body) {
   return data;
 }
 
-async function recognizeImageWithGemini(base64Data, mimeType, apiKey, onRetry) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+async function callGeminiWithFallback(body, onStatus) {
+  let lastErr;
+  for (const model of GEMINI_MODEL_CANDIDATES) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(currentApiKey)}`;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await callGeminiOnce(url, body);
+      } catch (err) {
+        lastErr = err;
+        if (err.retryable && attempt < MAX_RETRIES_PER_MODEL) {
+          const waitMs = 2000 * (2 ** attempt);
+          if (onStatus) onStatus(`模型 ${model} 忙碌中，${Math.round(waitMs / 1000)} 秒後重試...`);
+          await sleep(waitMs);
+          continue;
+        }
+        if (err.retryable) {
+          if (onStatus) onStatus(`模型 ${model} 持續忙碌，改用其他模型嘗試...`);
+          break; // fall through to the next candidate model
+        }
+        throw err; // non-retryable (bad key, safety block, etc.) - stop immediately
+      }
+    }
+  }
+  throw lastErr;
+}
+
+let currentApiKey = '';
+
+async function recognizeImageWithGemini(base64Data, mimeType, apiKey, onStatus) {
+  currentApiKey = apiKey;
   const body = {
     contents: [{
       parts: [
@@ -350,21 +389,7 @@ async function recognizeImageWithGemini(base64Data, mimeType, apiKey, onRetry) {
     },
   };
 
-  let data;
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      data = await callGeminiOnce(url, body);
-      break;
-    } catch (err) {
-      if (err.retryable && attempt < MAX_RETRIES) {
-        const waitMs = 2000 * (2 ** attempt);
-        if (onRetry) onRetry(attempt + 1, waitMs);
-        await sleep(waitMs);
-        continue;
-      }
-      throw err;
-    }
-  }
+  const data = await callGeminiWithFallback(body, onStatus);
 
   const candidate = data?.candidates?.[0];
   const finishReason = candidate?.finishReason;
@@ -520,8 +545,8 @@ async function recognizeEntries(entries) {
     try {
       const base64 = await fileToBase64(file);
       const mimeType = file.type || 'image/jpeg';
-      const table = await recognizeImageWithGemini(base64, mimeType, apiKeyInput.value.trim(), (attempt, waitMs) => {
-        logProgress(`… ${file.name} 目前模型忙碌中，${Math.round(waitMs / 1000)} 秒後自動重試（第 ${attempt} 次）`);
+      const table = await recognizeImageWithGemini(base64, mimeType, apiKeyInput.value.trim(), (statusText) => {
+        logProgress(`… ${file.name}：${statusText}`);
       });
       successfulPages.push({
         fileEntry: entries[i],
